@@ -118,7 +118,10 @@ func (c *txnCommitter) iterKeys(keys [][]byte, f func(batchKeys) error, sizeFn f
 	}
 	if asyncNonPrimary {
 		go func() {
-			c.doBatches(batches, f)
+			err1 := c.doBatches(batches, f)
+			if err1 != nil {
+				log.Warnf("txnCommitter async doBatches err: %v", err1)
+			}
 		}()
 		return nil
 	}
@@ -189,6 +192,7 @@ func (c *txnCommitter) prewriteSingleRegion(batch batchKeys) error {
 			return errors.Trace(err)
 		}
 		if regionErr := resp.GetRegionError(); regionErr != nil {
+			log.Warnf("prewrite region error: %v, retry later", regionErr)
 			// re-split keys and prewrite again.
 			// TODO: The recursive maybe not able to exit if TiKV &
 			// PD are implemented incorrectly. A possible fix is
@@ -214,6 +218,7 @@ func (c *txnCommitter) prewriteSingleRegion(batch batchKeys) error {
 				// It could be `Retryable` or `Abort`.
 				return errors.Trace(err)
 			}
+			log.Infof("prewrite encouters lock: %v", lockInfo)
 			lock := newLock(c.store, lockInfo.GetPrimaryLock(), lockInfo.GetLockVersion(), lockInfo.GetKey(), c.startTS)
 			_, err = lock.cleanup()
 			if err != nil && terror.ErrorNotEqual(err, errInnerRetryable) {
@@ -239,6 +244,7 @@ func (c *txnCommitter) commitSingleRegion(batch batchKeys) error {
 		return errors.Trace(err)
 	}
 	if regionErr := resp.GetRegionError(); regionErr != nil {
+		log.Warnf("commit region error: %v, retry later", regionErr)
 		// re-split keys and commit again.
 		err = c.commitKeys(batch.keys)
 		return errors.Trace(err)
@@ -283,6 +289,7 @@ func (c *txnCommitter) cleanupSingleRegion(batch batchKeys) error {
 		return errors.Trace(err)
 	}
 	if regionErr := resp.GetRegionError(); regionErr != nil {
+		log.Warnf("cleanup region error: %v, retry later", regionErr)
 		err = c.cleanupKeys(batch.keys)
 		return errors.Trace(err)
 	}
@@ -311,8 +318,12 @@ func (c *txnCommitter) Commit() error {
 		// Always clean up all written keys if the txn does not commit.
 		if !c.committed {
 			go func() {
-				c.cleanupKeys(c.writtenKeys)
-				log.Infof("txn clean up done, tid: %d", c.startTS)
+				err := c.cleanupKeys(c.writtenKeys)
+				if err != nil {
+					log.Info("txn cleanup err: %v, tid: %d", err, c.startTS)
+				} else {
+					log.Infof("txn cleanup done, tid: %d", c.startTS)
+				}
 			}()
 		}
 	}()
