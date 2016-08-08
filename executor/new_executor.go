@@ -113,7 +113,7 @@ func (e *HashJoinExec) Fields() []*ast.ResultField {
 }
 
 func (e *HashJoinExec) prepare() error {
-	e.hashTable = make(map[string][]*Row)
+	e.hashTable = make(map[string][]*Row, 1000000)
 	e.cursor = 0
 	for {
 		row, err := e.smallExec.Next()
